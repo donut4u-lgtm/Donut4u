@@ -6,7 +6,6 @@ import '../services/feed_service.dart';
 import '../services/auth_service.dart';
 import '../widgets/post_card.dart';
 import '../widgets/story_viewer.dart';
-import 'bot_status_screen.dart';
 import 'create_post_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -139,13 +138,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               } else {
                 _showLoginDialog();
               }
-            },
-          ),
-          IconButton(
-            tooltip: 'Bot Status',
-            icon: const Icon(Icons.smart_toy_outlined),
-            onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const BotStatusScreen()));
             },
           ),
           IconButton(
