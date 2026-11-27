@@ -106,6 +106,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final feed = context.watch<FeedService>();
     final auth = context.watch<AuthService>();
 
+    final newBadge = feed.lastNewCount > 0 ? ' • +${feed.lastNewCount} bago' : '';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -172,7 +174,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: Text(
                     feed.lastRefresh == null
                         ? 'Nagsisimula pa lang...'
-                        : 'Latest only • Auto-refresh every 1 min • Last: ${_formatTime(feed.lastRefresh!)}',
+                        : 'Live • Auto-refresh every 1 min$newBadge • Last: ${_formatTime(feed.lastRefresh!)}',
                     style: TextStyle(fontSize: 12, color: Colors.green.shade800),
                   ),
                 ),
