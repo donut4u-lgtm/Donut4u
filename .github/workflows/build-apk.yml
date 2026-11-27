@@ -85,6 +85,17 @@ jobs:
       - name: Install packages
         run: flutter pub get
 
+      - name: Check code for errors
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.txt 2>&1 || true
+          if grep -q " error • " analyze.txt; then
+            echo "=============== ERRORS FOUND ==============="
+            grep " error • " analyze.txt
+            echo "============================================"
+            exit 1
+          fi
+          echo "No code errors found."
+
       - name: Build release APK
         run: flutter build apk --release
 
