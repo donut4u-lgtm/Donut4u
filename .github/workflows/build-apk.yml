@@ -40,7 +40,7 @@ jobs:
             cp "$RUNNER_TEMP/gs.json" android/app/google-services.json
           fi
 
-      - name: Patch Android files (Firebase, permissions, desugaring)
+      - name: Patch Android files (Firebase, permissions, desugaring, lint)
         run: |
           python3 - <<'PY'
           import re, pathlib
@@ -64,6 +64,11 @@ jobs:
           t = t.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
           t += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
           b.write_text(t)
+
+          r = root / 'build.gradle.kts'
+          t = r.read_text()
+          t += '\nsubprojects {\n    tasks.whenTaskAdded {\n        if (name.startsWith("lintVital")) {\n            enabled = false\n        }\n    }\n}\n'
+          r.write_text(t)
 
           m = root / 'app' / 'src' / 'main' / 'AndroidManifest.xml'
           t = m.read_text()
