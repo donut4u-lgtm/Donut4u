@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'crawler/**'
+      - '**/crawl.py'
       - '.github/workflows/crawl.yml'
 
 permissions:
@@ -28,7 +28,16 @@ jobs:
           python-version: '3.12'
 
       - name: Run the 12 topic crawler bots
-        run: python3 crawler/crawl.py out/posts.json
+        run: |
+          SCRIPT="$(find . -name 'crawl.py' -not -path './.git/*' | head -1)"
+          if [ -z "$SCRIPT" ]; then
+            echo "ERROR: crawl.py was not found anywhere in the repo."
+            echo "Create the file crawler/crawl.py and paste the crawler code in it."
+            ls -la
+            exit 1
+          fi
+          echo "Using $SCRIPT"
+          python3 "$SCRIPT" out/posts.json
 
       - name: Publish results to the data branch
         run: |
