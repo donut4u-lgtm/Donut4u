@@ -6,7 +6,7 @@ class Post {
   final String title;
   final String body;
   final PostType type;
-  final String? mediaUrl;       // download URL (Firebase Storage or sample)
+  final String? mediaUrl;       // image/video URL (web or Firebase Storage)
   final String? localMediaPath; // temporary local path before upload
   final String authorId;
   final String authorName;
@@ -15,6 +15,8 @@ class Post {
   final int commentsCount;
   final bool isFresh;
   final bool isUserPost;
+  final String? sourceName;     // e.g. "Inquirer" (for real content)
+  final String? sourceUrl;      // link to the original story or video
 
   Post({
     required this.id,
@@ -31,6 +33,8 @@ class Post {
     this.commentsCount = 0,
     this.isFresh = true,
     this.isUserPost = false,
+    this.sourceName,
+    this.sourceUrl,
   });
 
   bool isStillFresh({int maxAgeMinutes = 120}) {
@@ -53,6 +57,8 @@ class Post {
       'commentsCount': commentsCount,
       'isFresh': isFresh,
       'isUserPost': isUserPost,
+      'sourceName': sourceName,
+      'sourceUrl': sourceUrl,
     };
   }
 
@@ -74,6 +80,8 @@ class Post {
       commentsCount: map['commentsCount'] ?? map['comments'] ?? 0,
       isFresh: map['isFresh'] ?? true,
       isUserPost: map['isUserPost'] ?? false,
+      sourceName: map['sourceName'],
+      sourceUrl: map['sourceUrl'],
     );
   }
 
@@ -97,6 +105,8 @@ class Post {
       commentsCount: commentsCount ?? this.commentsCount,
       isFresh: isFresh,
       isUserPost: isUserPost,
+      sourceName: sourceName,
+      sourceUrl: sourceUrl,
     );
   }
 }
