@@ -1,0 +1,44 @@
+name: Crawl internet
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'crawler/**'
+      - '.github/workflows/crawl.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crawl
+  cancel-in-progress: true
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run the 12 topic crawler bots
+        run: python3 crawler/crawl.py out/posts.json
+
+      - name: Publish results to the data branch
+        run: |
+          set -e
+          cp out/posts.json "$RUNNER_TEMP/posts.json"
+          git config user.name "donut4u-crawler"
+          git config user.email "crawler@users.noreply.github.com"
+          git checkout --orphan data-new
+          git rm -rf . > /dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/posts.json" posts.json
+          git add posts.json
+          git commit -m "crawl $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -f origin HEAD:data
