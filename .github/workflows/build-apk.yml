@@ -58,8 +58,8 @@ jobs:
           assert 'id("dev.flutter.flutter-gradle-plugin")' in t, 'app/build.gradle.kts layout changed'
           t = t.replace('id("dev.flutter.flutter-gradle-plugin")',
                         'id("dev.flutter.flutter-gradle-plugin")\n    id("com.google.gms.google-services")', 1)
-          t = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 23', t)
-          assert 'minSdk = 23' in t, 'minSdk not patched'
+          t = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 24', t)
+          assert 'minSdk = 24' in t, 'minSdk not patched'
           assert 'compileOptions {' in t, 'compileOptions missing'
           t = t.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
           t += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
