@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../bots/manager_bot.dart';
 import '../models/post.dart';
+import '../models/topic.dart';
 import 'data_service.dart';
 
 class FeedService extends ChangeNotifier {
@@ -9,7 +11,9 @@ class FeedService extends ChangeNotifier {
   List<Post> _posts = [];
   String? _currentTopicId;
   bool _isLoading = false;
+  bool _disposed = false;
   DateTime? _lastRefresh;
+  Timer? _uiTimer;
 
   List<Post> get posts => _posts;
   bool get isLoading => _isLoading;
@@ -19,49 +23,71 @@ class FeedService extends ChangeNotifier {
   void initialize() {
     _manager.initialize();
     _data.initialize();
-    _load();
-    _startUiTicker();
-  }
-
-  void _startUiTicker() {
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 60));
-      await _load();
-      return true;
+    _load(refresh: false);
+    // The ManagerBot already creates new posts every 60 seconds by itself.
+    // This timer only re-reads the list so the screen stays up to date.
+    _uiTimer?.cancel();
+    _uiTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _load(refresh: false);
     });
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _disposed = true;
+    _uiTimer?.cancel();
+    super.dispose();
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  String? get _currentTopicName {
+    if (_currentTopicId == null) return null;
+    for (final t in kTopics) {
+      if (t.id == _currentTopicId) return t.nameTagalog;
+    }
+    return null;
+  }
+
+  Future<void> _load({bool refresh = false}) async {
     _isLoading = true;
-    notifyListeners();
+    _notify();
 
-    await _manager.forceRefresh();
-    final botPosts = _manager.getFreshPosts(topicId: _currentTopicId);
-    final userPosts = await _data.fetchRecentUserPosts(maxAgeMinutes: ManagerBot.maxAgeMinutes);
+    if (refresh) {
+      await _manager.forceRefresh();
+    }
 
-    final filteredUser = userPosts.where((p) {
-      if (_currentTopicId == null) return true;
-      return p.topic.toLowerCase() == _currentTopicId!.toLowerCase();
-    }).toList();
+    final topicName = _currentTopicName;
+    bool matches(Post p) =>
+        topicName == null || p.topic.toLowerCase() == topicName.toLowerCase();
 
-    _posts = [...filteredUser, ...botPosts];
-    _posts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final botPosts = _manager.getFreshPosts().where(matches).toList();
+    final userPosts =
+        await _data.fetchRecentUserPosts(maxAgeMinutes: ManagerBot.maxAgeMinutes);
+    final filteredUser = userPosts.where(matches).toList();
+
+    final all = [...filteredUser, ...botPosts];
+    all.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _posts = all;
     _lastRefresh = DateTime.now();
 
     _isLoading = false;
-    notifyListeners();
+    _notify();
   }
 
   Future<void> setTopic(String? topicId) async {
     _currentTopicId = topicId;
-    await _load();
+    await _load(refresh: false);
   }
 
-  Future<void> forceRefresh() async => _load();
+  /// Called by the refresh button and pull-to-refresh.
+  Future<void> forceRefresh() async => _load(refresh: true);
 
   Future<void> addUserPost(Post post) async {
     await _data.saveUserPost(post);
-    await _load();
+    await _load(refresh: false);
   }
 
   Map<String, String> getBotStatus() => _manager.getBotStatus();
