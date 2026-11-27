@@ -53,8 +53,8 @@ class TopicBot {
       body: template['body']!,
       type: type,
       mediaUrl: mediaUrl,
-      authorId: topic.botName,
-      authorName: topic.botName,
+      authorId: topic.id,
+      authorName: topic.nameTagalog,
       createdAt: now.subtract(Duration(seconds: _rng.nextInt(40))),
       likes: _rng.nextInt(40),
       commentsCount: _rng.nextInt(8),
@@ -73,26 +73,26 @@ class TopicBot {
       case 'haha':
         return [
           {'title': 'Yung tipong akala mo serious pero...', 'body': 'Isang simpleng biro ang nagpasabog ng group chat. Haha level maximum.'},
-          {'title': 'Meme of the minute – bago lang lumabas', 'body': 'Kapag nakita mo to, siguradong mapapangiti ka. Pure haha content galing sa HahaBot.'},
+          {'title': 'Meme of the minute – bago lang lumabas', 'body': 'Kapag nakita mo to, siguradong mapapangiti ka. Pure haha content.'},
         ];
       case 'bago':
         return [
           {'title': 'Kakapublish lang – unang sulyap', 'body': 'Ito ang pinakabagong post na kakalabas pa lang. Walang lumang content dito.'},
-          {'title': 'Fresh off the bot – just now', 'body': 'BagoBot here. Ito ang pinaka-recent na kuwento sa feed mo.'},
+          {'title': 'Fresh na fresh – just now', 'body': 'Ito ang pinaka-recent na kuwento sa feed mo.'},
         ];
       case 'uso':
         return [
           {'title': 'Ito ang pinag-uusapan ngayong minuto', 'body': 'Biglang sumikat. Kung gusto mong updated, nandito ang latest uso.'},
-          {'title': 'Trending na trending – huwag ma-left out', 'body': 'UsoBot nag-update. Ito ang pinakamainit ngayon.'},
+          {'title': 'Trending na trending – huwag ma-left out', 'body': 'May bagong update. Ito ang pinakamainit ngayon.'},
         ];
       case 'balita':
         return [
-          {'title': 'Maikling update – kaka-release lang', 'body': 'Walang lumang balita. Ito ang pinakabagong short report mula sa BalitaBot.'},
+          {'title': 'Maikling update – kaka-release lang', 'body': 'Walang lumang balita. Ito ang pinakabagong short report.'},
           {'title': 'Quick news bite – just in', 'body': 'Maikli, malinaw, at sariwa. Para sa mga ayaw magbasa ng mahaba.'},
         ];
       case 'chika':
         return [
-          {'title': 'Chismis alert – bago pa lang ang usap', 'body': 'Hindi verified, pure chika lang. ChikaBot nagdala ng pinakabago.'},
+          {'title': 'Chismis alert – bago pa lang ang usap', 'body': 'Hindi verified, pure chika lang. Pinakabago ngayon.'},
           {'title': 'May bagong kwento sa community', 'body': 'Sariwang chika, walang recycle. Basahin inside the app.'},
         ];
       case 'pagkain':
@@ -103,31 +103,31 @@ class TopicBot {
       case 'libangan':
         return [
           {'title': 'Bagong clip na pinag-uusapan', 'body': 'Maikling video, malaking saya. Panoorin inside the app, hindi sa labas.'},
-          {'title': 'Entertainment update – just dropped', 'body': 'LibanganBot naghatid ng pinakabagong short feature.'},
+          {'title': 'Entertainment update – just dropped', 'body': 'Naghatid ng pinakabagong short feature.'},
         ];
       case 'sports':
         return [
           {'title': 'Highlight na kaka-upload lang', 'body': 'Maikling sports moment. Panoorin dito mismo sa app.'},
-          {'title': 'Quick score update + reaction', 'body': 'Walang delayed news. SportsBot fresh content only.'},
+          {'title': 'Quick score update + reaction', 'body': 'Walang delayed news. Fresh content only.'},
         ];
       case 'tekno':
         return [
-          {'title': 'Bagong app tip na useful ngayon', 'body': 'Maikli at actionable. TeknoBot share ng pinakabago.'},
+          {'title': 'Bagong app tip na useful ngayon', 'body': 'Maikli at actionable. Share ng pinakabago.'},
           {'title': 'Gadget talk – kaka-release ng balita', 'body': 'Walang recycling ng lumang article. Fresh tech bite.'},
         ];
       case 'pagibig':
         return [
           {'title': 'Sweet short story – bagong post', 'body': 'Maikling kwento tungkol sa pag-ibig. Sariwa at light.'},
-          {'title': 'Advice na kailangan mo ngayong araw', 'body': 'PagibigBot may bago. Basahin inside.'},
+          {'title': 'Advice na kailangan mo ngayong araw', 'body': 'May bago. Basahin inside.'},
         ];
       case 'lokal':
         return [
-          {'title': 'May nangyayari sa inyong lugar', 'body': 'LokalBot nag-update. Community-level fresh news.'},
+          {'title': 'May nangyayari sa inyong lugar', 'body': 'Nag-update. Community-level fresh news.'},
           {'title': 'Local happening – just reported', 'body': 'Para sa mga gusto ng malapit na usapan.'},
         ];
       default:
         return [
-          {'title': 'Bagong post mula sa ${topic.botName}', 'body': 'Sariwang content, walang luma.'},
+          {'title': 'Bagong post', 'body': 'Sariwang content, walang luma.'},
         ];
     }
   }
