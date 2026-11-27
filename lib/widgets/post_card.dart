@@ -1,5 +1,7 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../models/post.dart';
+import '../screens/article_screen.dart';
 import '../screens/comments_screen.dart';
 
 class PostCard extends StatelessWidget {
@@ -12,9 +14,27 @@ class PostCard extends StatelessWidget {
     this.onTapStoryOrVideo,
   });
 
+  void _openArticle(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ArticleScreen(post: post)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMedia = post.type == PostType.story || post.type == PostType.video;
+    final hasImage = post.type == PostType.image &&
+        post.mediaUrl != null &&
+        post.mediaUrl!.startsWith('http');
+    final hasSource = post.sourceUrl != null && post.sourceUrl!.isNotEmpty;
+
+    VoidCallback? onTap;
+    if (isMedia) {
+      onTap = onTapStoryOrVideo;
+    } else if (hasSource) {
+      onTap = () => _openArticle(context);
+    }
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -22,7 +42,7 @@ class PostCard extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: isMedia ? onTapStoryOrVideo : null,
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -76,6 +96,23 @@ class PostCard extends StatelessWidget {
               Text(post.title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
               const SizedBox(height: 6),
               Text(post.body, style: TextStyle(fontSize: 14, color: Colors.grey.shade800, height: 1.35)),
+              if (hasImage) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: CachedNetworkImage(
+                    imageUrl: post.mediaUrl!,
+                    width: double.infinity,
+                    height: 180,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => Container(
+                      height: 180,
+                      color: Colors.grey.shade200,
+                    ),
+                    errorWidget: (context, url, error) => const SizedBox.shrink(),
+                  ),
+                ),
+              ],
               if (isMedia) ...[
                 const SizedBox(height: 12),
                 Container(
@@ -128,10 +165,32 @@ class PostCard extends StatelessWidget {
                       ),
                       child: Text('USER', style: TextStyle(fontSize: 10, color: Colors.blue.shade700, fontWeight: FontWeight.bold)),
                     )
-                  else
-                    Text('Fresh only', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w600)),
+                  else if (post.sourceName != null)
+                    Flexible(
+                      child: Text(
+                        post.sourceName!,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                      ),
+                    ),
                 ],
               ),
+              if (hasSource && !isMedia) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: () => _openArticle(context),
+                    icon: const Icon(Icons.article_outlined, size: 16),
+                    label: const Text('Basahin'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
