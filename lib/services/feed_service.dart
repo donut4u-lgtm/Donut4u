@@ -12,23 +12,27 @@ class FeedService extends ChangeNotifier {
   String? _currentTopicId;
   bool _isLoading = false;
   bool _disposed = false;
+  bool _topicJustChanged = false;
   DateTime? _lastRefresh;
   Timer? _uiTimer;
+  int _lastNewCount = 0;
 
   List<Post> get posts => _posts;
   bool get isLoading => _isLoading;
   DateTime? get lastRefresh => _lastRefresh;
   String? get currentTopicId => _currentTopicId;
 
+  /// How many posts appeared in the most recent refresh.
+  int get lastNewCount => _lastNewCount;
+
   void initialize() {
     _manager.initialize();
     _data.initialize();
-    _load(refresh: false);
-    // The ManagerBot already creates new posts every 60 seconds by itself.
-    // This timer only re-reads the list so the screen stays up to date.
+    _load(refresh: true);
+    // Every minute: download fresh content from the internet, then update the screen.
     _uiTimer?.cancel();
     _uiTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      _load(refresh: false);
+      if (!_isLoading) _load(refresh: true);
     });
   }
 
@@ -70,6 +74,17 @@ class FeedService extends ChangeNotifier {
 
     final all = [...filteredUser, ...botPosts];
     all.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    // Count what is new since the last time this list was shown.
+    final firstLoad = _lastRefresh == null;
+    if (firstLoad || _topicJustChanged) {
+      _lastNewCount = 0;
+    } else {
+      final oldIds = _posts.map((p) => p.id).toSet();
+      _lastNewCount = all.where((p) => !oldIds.contains(p.id)).length;
+    }
+    _topicJustChanged = false;
+
     _posts = all;
     _lastRefresh = DateTime.now();
 
@@ -79,6 +94,7 @@ class FeedService extends ChangeNotifier {
 
   Future<void> setTopic(String? topicId) async {
     _currentTopicId = topicId;
+    _topicJustChanged = true;
     await _load(refresh: false);
   }
 
@@ -87,6 +103,7 @@ class FeedService extends ChangeNotifier {
 
   Future<void> addUserPost(Post post) async {
     await _data.saveUserPost(post);
+    _topicJustChanged = true;
     await _load(refresh: false);
   }
 
