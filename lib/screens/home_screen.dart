@@ -92,6 +92,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final auth = context.read<AuthService>();
     if (!auth.isLoggedIn) {
       _showLoginDialog().then((_) {
+        if (!mounted) return;
         if (context.read<AuthService>().isLoggedIn) {
           Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostScreen()));
         }
@@ -261,6 +262,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final diff = now.difference(dt);
     if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    return '\( {dt.hour.toString().padLeft(2, '0')}: \){dt.minute.toString().padLeft(2, '0')}';
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
   }
 }
