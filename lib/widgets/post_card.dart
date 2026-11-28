@@ -1,8 +1,27 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../models/post.dart';
 import '../screens/article_screen.dart';
 import '../screens/comments_screen.dart';
+
+// Photos posted by users are saved inside the post (data:image/...;base64,...).
+// Decode each one only once.
+final Map<String, Uint8List> _photoCache = {};
+
+Uint8List? _photoBytes(String url) {
+  final cached = _photoCache[url];
+  if (cached != null) return cached;
+  try {
+    final bytes = base64Decode(url.substring(url.indexOf(',') + 1));
+    if (_photoCache.length > 40) _photoCache.clear();
+    _photoCache[url] = bytes;
+    return bytes;
+  } catch (_) {
+    return null;
+  }
+}
 
 class PostCard extends StatelessWidget {
   final Post post;
@@ -26,7 +45,7 @@ class PostCard extends StatelessWidget {
     final isMedia = post.type == PostType.story || post.type == PostType.video;
     final hasImage = post.type == PostType.image &&
         post.mediaUrl != null &&
-        post.mediaUrl!.startsWith('http');
+        (post.mediaUrl!.startsWith('http') || post.mediaUrl!.startsWith('data:image'));
     final hasSource = post.sourceUrl != null && post.sourceUrl!.isNotEmpty;
 
     VoidCallback? onTap;
@@ -100,17 +119,19 @@ class PostCard extends StatelessWidget {
                 const SizedBox(height: 12),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: CachedNetworkImage(
-                    imageUrl: post.mediaUrl!,
-                    width: double.infinity,
-                    height: 180,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => Container(
-                      height: 180,
-                      color: Colors.grey.shade200,
-                    ),
-                    errorWidget: (context, url, error) => const SizedBox.shrink(),
-                  ),
+                  child: post.mediaUrl!.startsWith('data:image')
+                      ? _memoryPhoto(post.mediaUrl!)
+                      : CachedNetworkImage(
+                          imageUrl: post.mediaUrl!,
+                          width: double.infinity,
+                          height: 180,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => Container(
+                            height: 180,
+                            color: Colors.grey.shade200,
+                          ),
+                          errorWidget: (context, url, error) => const SizedBox.shrink(),
+                        ),
                 ),
               ],
               if (isMedia) ...[
@@ -195,6 +216,18 @@ class PostCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _memoryPhoto(String url) {
+    final bytes = _photoBytes(url);
+    if (bytes == null) return const SizedBox.shrink();
+    return Image.memory(
+      bytes,
+      width: double.infinity,
+      height: 180,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
     );
   }
 
