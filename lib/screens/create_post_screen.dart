@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -32,28 +33,32 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     super.dispose();
   }
 
-  Future<void> _pickMedia(ImageSource source, {required bool isVideo}) async {
-    try {
-      final XFile? file = isVideo
-          ? await _picker.pickVideo(source: source, maxDuration: const Duration(minutes: 2))
-          : await _picker.pickImage(source: source, maxWidth: 1920, imageQuality: 85);
+  void _say(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
 
+  Future<void> _pickPhoto(ImageSource source) async {
+    try {
+      // Small photo: it is saved inside the post (free, no extra storage).
+      final XFile? file = await _picker.pickImage(
+        source: source,
+        maxWidth: 900,
+        maxHeight: 900,
+        imageQuality: 55,
+      );
       if (file != null) {
         setState(() {
           _pickedFile = File(file.path);
-          _type = isVideo ? PostType.video : PostType.image;
+          _type = PostType.image;
         });
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Hindi makuha ang media: $e')),
-        );
-      }
+      _say('Cannot get the photo: $e');
     }
   }
 
-  void _showPickerOptions(bool isVideo) {
+  void _showPickerOptions() {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SafeArea(
@@ -61,18 +66,18 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.photo_library),
-              title: Text(isVideo ? 'Pumili ng Video mula sa Gallery' : 'Pumili ng Larawan mula sa Gallery'),
+              title: const Text('Choose a photo from Gallery'),
               onTap: () {
                 Navigator.pop(ctx);
-                _pickMedia(ImageSource.gallery, isVideo: isVideo);
+                _pickPhoto(ImageSource.gallery);
               },
             ),
             ListTile(
               leading: const Icon(Icons.camera_alt),
-              title: Text(isVideo ? 'Mag-record / Kumuha ng Video' : 'Kumuha ng Larawan'),
+              title: const Text('Take a photo'),
               onTap: () {
                 Navigator.pop(ctx);
-                _pickMedia(ImageSource.camera, isVideo: isVideo);
+                _pickPhoto(ImageSource.camera);
               },
             ),
           ],
@@ -84,16 +89,12 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Future<void> _submit() async {
     final auth = context.read<AuthService>();
     if (!auth.requireLogin()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mag-sign in muna para makapag-post')),
-      );
+      _say('Please sign in first to post.');
       return;
     }
 
     if (_titleCtrl.text.trim().isEmpty || _bodyCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lagyan ng title at body')),
-      );
+      _say('Please write a title and a caption.');
       return;
     }
 
@@ -101,11 +102,19 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
 
     String? mediaUrl;
     if (_pickedFile != null) {
-      final data = DataService();
-      mediaUrl = await data.uploadMedia(
-        _pickedFile!,
-        folder: _type == PostType.video || _type == PostType.story ? 'videos' : 'images',
-      );
+      try {
+        final bytes = await _pickedFile!.readAsBytes();
+        if (bytes.length > 700 * 1024) {
+          _say('The photo is too big. Please choose a smaller one.');
+          setState(() => _isSubmitting = false);
+          return;
+        }
+        mediaUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+      } catch (e) {
+        _say('Cannot read the photo: $e');
+        setState(() => _isSubmitting = false);
+        return;
+      }
     }
 
     final post = Post(
@@ -113,9 +122,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       topic: _selectedTopic,
       title: _titleCtrl.text.trim(),
       body: _bodyCtrl.text.trim(),
-      type: _type,
+      type: mediaUrl != null ? PostType.image : PostType.text,
       mediaUrl: mediaUrl,
-      localMediaPath: _pickedFile?.path,
       authorId: auth.userId ?? 'unknown',
       authorName: auth.displayName ?? 'User',
       createdAt: DateTime.now(),
@@ -126,12 +134,13 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     );
 
     await context.read<FeedService>().addUserPost(post);
+    final error = DataService().lastError;
 
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Na-post na! Makikita sa feed.')),
-      );
+      _say(error == null
+          ? 'Posted! Everyone can see it.'
+          : 'Saved only on this phone. Reason: $error');
     }
   }
 
@@ -139,13 +148,13 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Gumawa ng Post'),
+        title: const Text('Create a post'),
         actions: [
           TextButton(
             onPressed: _isSubmitting ? null : _submit,
             child: _isSubmitting
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('I-post'),
+                : const Text('Post'),
           ),
         ],
       ),
@@ -154,7 +163,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         children: [
           DropdownButtonFormField<String>(
             value: _selectedTopic,
-            decoration: const InputDecoration(labelText: 'Column / Topic', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Column', border: OutlineInputBorder()),
             items: kTopics
                 .map((t) => DropdownMenuItem(value: t.nameTagalog, child: Text('${t.emoji} ${t.nameTagalog}')))
                 .toList(),
@@ -170,75 +179,34 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
           TextField(
             controller: _bodyCtrl,
             decoration: const InputDecoration(
-              labelText: 'Sulat / Caption',
+              labelText: 'Caption',
               border: OutlineInputBorder(),
               alignLabelWithHint: true,
             ),
             maxLines: 5,
             maxLength: 500,
           ),
-          const SizedBox(height: 16),
-          const Text('Uri ng post', style: TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          SegmentedButton<PostType>(
-            segments: const [
-              ButtonSegment(value: PostType.text, label: Text('Text'), icon: Icon(Icons.text_fields)),
-              ButtonSegment(value: PostType.image, label: Text('Image'), icon: Icon(Icons.image)),
-              ButtonSegment(value: PostType.video, label: Text('Video'), icon: Icon(Icons.videocam)),
-              ButtonSegment(value: PostType.story, label: Text('Story'), icon: Icon(Icons.auto_stories)),
-            ],
-            selected: {_type},
-            onSelectionChanged: (s) {
-              setState(() {
-                _type = s.first;
-                if (_type == PostType.text) _pickedFile = null;
-              });
-            },
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.photo_library),
+            label: Text(_pickedFile == null ? 'Add a photo' : 'Change the photo'),
+            onPressed: _showPickerOptions,
           ),
-          const SizedBox(height: 20),
-          if (_type == PostType.image || _type == PostType.video || _type == PostType.story) ...[
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.photo_library),
-                    label: Text(_type == PostType.image ? 'Pumili ng Larawan' : 'Pumili ng Video'),
-                    onPressed: () => _showPickerOptions(_type != PostType.image),
-                  ),
-                ),
-              ],
+          if (_pickedFile != null) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(_pickedFile!, height: 200, width: double.infinity, fit: BoxFit.cover),
             ),
-            if (_pickedFile != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                height: 160,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black12,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: _type == PostType.image
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.file(_pickedFile!, fit: BoxFit.cover),
-                      )
-                    : const Center(child: Icon(Icons.videocam, size: 48)),
-              ),
-              TextButton.icon(
-                onPressed: () => setState(() => _pickedFile = null),
-                icon: const Icon(Icons.close, size: 18),
-                label: const Text('Alisin ang media'),
-              ),
-            ],
+            TextButton.icon(
+              onPressed: () => setState(() {
+                _pickedFile = null;
+                _type = PostType.text;
+              }),
+              icon: const Icon(Icons.close, size: 18),
+              label: const Text('Remove the photo'),
+            ),
           ],
-          const SizedBox(height: 24),
-          Text(
-            DataService().isReady
-                ? 'Firebase ready – media will be uploaded to Storage.'
-                : 'Firebase not configured yet – post will still work locally. Add google-services.json later for cloud sync & media upload.',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
         ],
       ),
     );
