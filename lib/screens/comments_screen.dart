@@ -43,7 +43,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
     final auth = context.read<AuthService>();
     if (!auth.isLoggedIn) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mag-sign in muna para makapag-comment')),
+        const SnackBar(content: Text('Please sign in first to comment.')),
       );
       return;
     }
@@ -60,9 +60,17 @@ class _CommentsScreenState extends State<CommentsScreen> {
       createdAt: DateTime.now(),
     );
     await _data.addComment(comment);
+    final error = _data.lastError;
     _textCtrl.clear();
     await _load();
-    if (mounted) setState(() => _sending = false);
+    if (mounted) {
+      setState(() => _sending = false);
+      if (error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Comment saved only on this phone. Reason: $error')),
+        );
+      }
+    }
   }
 
   @override
@@ -96,7 +104,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _comments.isEmpty
-                    ? const Center(child: Text('Wala pang comments. Maging first!'))
+                    ? const Center(child: Text('No comments yet. Be the first!'))
                     : ListView.separated(
                         padding: const EdgeInsets.all(12),
                         itemCount: _comments.length,
@@ -128,7 +136,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
                     child: TextField(
                       controller: _textCtrl,
                       decoration: const InputDecoration(
-                        hintText: 'Sumulat ng comment...',
+                        hintText: 'Write a comment...',
                         border: OutlineInputBorder(),
                         isDense: true,
                         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
