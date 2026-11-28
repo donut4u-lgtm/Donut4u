@@ -35,7 +35,7 @@ TOPICS = {
                     'viral video Pinoy OR trending Philippines',
                     'netizens reaction OR kumalat OR pinag-usapan Pilipinas',
                     'trending sa social media Philippines today'],
-        'feeds': [],
+        'feeds': [('Rappler', 'https://www.rappler.com/feed/'), ('GMA News', 'https://data.gmanetwork.com/gno/rss/news/feed.xml'), ('Inquirer Lifestyle', 'https://lifestyle.inquirer.net/feed')],
         'channels': [('KMJS', '@KMJS'), ('Rappler', '@rapplerdotcom')],
     },
     'haha': {
@@ -45,7 +45,8 @@ TOPICS = {
                     'meme OR prank OR biro OR kalokohan Pilipinas viral',
                     'comedy skit OR bloopers OR funny video Philippines',
                     'hugot funny OR joke OR pick-up lines Pinoy'],
-        'feeds': [],
+        'feeds': [('Inquirer Lifestyle', 'https://lifestyle.inquirer.net/feed'), ('Rappler', 'https://www.rappler.com/feed/')],
+        'strict': ['Inquirer Lifestyle', 'Rappler'],
         'channels': [('Vice Ganda', '@ViceGandaOfficial'), ('Bubble Gang', '@BubbleGang'),
                      ('Eat Bulaga', '@eatbulaga'), ('Its Showtime', '@ABSCBNsShowtime')],
         'must': r'(haha|tawa|tuwa|funny|meme|prank|joke|biro|kalokohan|comed|hilarious|kwela|hugot|bloopers?|fail|silly|banat|comic)',
@@ -54,7 +55,7 @@ TOPICS = {
     'bago': {
         'name': 'Bago',
         'queries': ['bagong labas OR breaking OR latest Pilipinas'],
-        'feeds': [],
+        'feeds': [('Inquirer', 'https://newsinfo.inquirer.net/feed'), ('GMA News', 'https://data.gmanetwork.com/gno/rss/news/feed.xml'), ('Philstar', 'https://www.philstar.com/rss/headlines'), ('Rappler', 'https://www.rappler.com/feed/')],
         'channels': [],
     },
     'uso': {
@@ -63,7 +64,7 @@ TOPICS = {
                     'trending now Philippines OR fashion trend',
                     'bagong uso OR kinagigiliwan OR sikat ngayon Pilipinas',
                     'TikTok trend OR Facebook trend Philippines'],
-        'feeds': [],
+        'feeds': [('Inquirer Lifestyle', 'https://lifestyle.inquirer.net/feed'), ('Rappler', 'https://www.rappler.com/feed/'), ('Philstar Lifestyle', 'https://www.philstar.com/rss/lifestyle')],
         'channels': [('Mashable', '@mashable'), ('BuzzFeed Video', '@buzzfeedvideo')],
     },
     'balita': {
@@ -96,7 +97,8 @@ TOPICS = {
                     'Filipino food OR lutuin OR kainan',
                     'ulam OR meryenda OR dessert OR kape Pilipinas',
                     'food trend OR new restaurant Manila OR Cebu OR Davao'],
-        'feeds': [],
+        'feeds': [('Inquirer Lifestyle', 'https://lifestyle.inquirer.net/feed'), ('Philstar Lifestyle', 'https://www.philstar.com/rss/lifestyle')],
+        'strict': ['Inquirer Lifestyle', 'Philstar Lifestyle'],
         'channels': [('Panlasang Pinoy', '@panlasangpinoy'), ('Ninong Ry', '@NinongRy'),
                      ('Kawaling Pinoy', '@KawalingPinoy'), ('Tastemade', '@tastemade')],
         'must': r'(food|pagkain|recipe|ulam|luto|lutuin|kain|restaurant|kainan|cafe|kape|dessert|meryenda|adobo|sinigang|lechon|pizza|burger|noodles|cook|chef|bake|street food|snack|menu)',
@@ -232,25 +234,66 @@ def shorten(s, n):
     return (cut[:sp] if sp > 40 else cut) + '…'
 
 
+GN_STATS = {'ok': 0, 'fail': 0}
+
+
+def post(url, body, timeout=12):
+    req = urllib.request.Request(url, data=body.encode('utf-8'), headers={
+        'User-Agent': UA,
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'Cookie': 'CONSENT=YES+1',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read(400_000).decode('utf-8', 'replace')
+    except Exception:
+        return ''
+
+
 def decode_google_news(link):
-    m = re.search(r'/articles/([\w-]+)', link)
+    """Google News links are locked. Ask Google for the real article address."""
+    m = re.search(r'/articles/([^?/#]+)', link)
     if not m:
         return None
-    s = m.group(1)
+    gid = m.group(1)
+    # old style links hide the address in plain base64
     try:
-        raw = base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+        raw = base64.urlsafe_b64decode(gid + '=' * (-len(gid) % 4))
+        m2 = re.search(rb'https?://[\x21-\x7e]+', raw)
+        if m2:
+            return m2.group(0).decode('ascii', 'ignore')
+    except Exception:
+        pass
+    try:
+        sg = ts = None
+        for base in ('https://news.google.com/rss/articles/', 'https://news.google.com/articles/'):
+            code, page, _ = fetch(base + gid, maxbytes=300_000)
+            a = re.search(r'data-n-a-sg="([^"]+)"', page)
+            b = re.search(r'data-n-a-ts="([^"]+)"', page)
+            if a and b:
+                sg, ts = a.group(1), b.group(1)
+                break
+        if not sg:
+            return None
+        inner = json.dumps(["garturlreq",
+                            [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1,
+                              None, None, None, None, None, 0, 1],
+                             "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+                            gid, int(ts), sg], separators=(',', ':'))
+        outer = json.dumps([[["Fbv4je", inner, None, "generic"]]], separators=(',', ':'))
+        text = post('https://news.google.com/_/DotsSplashUi/data/batchexecute',
+                    'f.req=' + urllib.parse.quote(outer))
+        data = json.loads(text.split('\n\n')[1])
+        url = json.loads(data[0][2])[1]
+        return url if str(url).startswith('http') else None
     except Exception:
         return None
-    m2 = re.search(rb'https?://[\x21-\x7e]+', raw)
-    return m2.group(0).decode('ascii', 'ignore') if m2 else None
 
 
 def real_url(link):
     if 'bing.com/news' in link and 'url=' in link:
         q = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
         return (q.get('url') or [''])[0] or None
-    if 'news.google.com' in link:
-        return decode_google_news(link)
     return link
 
 
@@ -284,6 +327,7 @@ def rss_candidates(xml, origin):
             'video_id': '',
             'video_url': '',
             'search': origin in ('google', 'bing'),
+            'gnews': 'news.google.com' in url,
         })
     return out
 
@@ -356,6 +400,9 @@ def collect(tid, cfg):
     for origin, u in urls:
         code, xml, _ = fetch(u, accept='application/rss+xml,application/xml,text/xml,*/*')
         got = rss_candidates(xml, origin) if code == 200 and xml else []
+        if origin in cfg.get('strict', ()):
+            for g in got:
+                g['search'] = True
         s = stats.setdefault(origin, [0, 0])
         s[0] += 1 if code == 200 else 0
         s[1] += len(got)
@@ -396,6 +443,14 @@ def meta_map(page):
 
 
 def enrich(c):
+    if c.get('gnews'):
+        real = decode_google_news(c['url'])
+        if not real or 'news.google.com' in real:
+            GN_STATS['fail'] += 1
+            return c
+        GN_STATS['ok'] += 1
+        c['url'] = real
+        c['gnews'] = False
     code, page, final = fetch(c['url'])
     if code != 200 or not page:
         return c
@@ -462,6 +517,7 @@ def main(out_path):
     print(f'Opening {len(all_cands)} pages...', flush=True)
     with ThreadPoolExecutor(max_workers=40) as pool:
         list(pool.map(enrich, all_cands))
+    print(f"Google links opened: {GN_STATS['ok']} ok, {GN_STATS['fail']} failed")
 
     posts = []
     print()
