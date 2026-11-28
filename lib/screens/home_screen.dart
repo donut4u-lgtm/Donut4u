@@ -21,19 +21,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: kTopics.length + 1, vsync: this);
+    _tabController = TabController(length: kTopics.length, vsync: this);
     _tabController.addListener(_onTabChanged);
   }
 
   void _onTabChanged() {
-    if (_tabController.indexIsChanging) return;
+    final i = _tabController.index;
+    final id = kTopics[i].id;
     final feed = context.read<FeedService>();
-    if (_tabController.index == 0) {
-      feed.setTopic(null);
-    } else {
-      final topic = kTopics[_tabController.index - 1];
-      feed.setTopic(topic.id);
-    }
+    if (feed.currentTopicId != id) feed.setTopic(id);
   }
 
   @override
@@ -42,71 +38,97 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.dispose();
   }
 
-  Future<void> _showLoginDialog() async {
-    final nameCtrl = TextEditingController();
-    final result = await showDialog<bool>(
+  Future<bool> _showLoginDialog() async {
+    final emailCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    bool isNew = false;
+    bool busy = false;
+    String? error;
+
+    final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Mag-sign in'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Kailangan lang mag-sign in kung gusto mong mag-comment, mag-post, o mag-upload. '
-              'Pwede mong i-browse ang lahat nang walang account.',
-              style: TextStyle(fontSize: 13),
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: Text(isNew ? 'Create account' : 'Sign in'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Password',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+                ],
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: busy ? null : () => setS(() { isNew = !isNew; error = null; }),
+                  child: Text(isNew
+                      ? 'Already have an account? Sign in'
+                      : 'No account yet? Create one'),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Pangalan / Display name',
-                border: OutlineInputBorder(),
-              ),
-              autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setS(() { busy = true; error = null; });
+                      final auth = context.read<AuthService>();
+                      final err = isNew
+                          ? await auth.registerWithEmail(emailCtrl.text, passCtrl.text)
+                          : await auth.signInWithEmail(emailCtrl.text, passCtrl.text);
+                      if (err == null) {
+                        if (ctx.mounted) Navigator.pop(ctx, true);
+                      } else {
+                        setS(() { busy = false; error = err; });
+                      }
+                    },
+              child: Text(busy ? '...' : (isNew ? 'Create' : 'Sign in')),
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Magpatuloy'),
-          ),
-        ],
       ),
     );
-
-    if (result == true && nameCtrl.text.trim().isNotEmpty && mounted) {
-      final ok = await context.read<AuthService>().signInWithDisplayName(nameCtrl.text);
-      if (ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Welcome, ${nameCtrl.text.trim()}!')),
-        );
-      }
-    }
+    return ok == true;
   }
 
-  void _onCreatePost() {
+  Future<void> _onCreatePost() async {
     final auth = context.read<AuthService>();
     if (!auth.isLoggedIn) {
-      _showLoginDialog().then((_) {
-        if (!mounted) return;
-        if (context.read<AuthService>().isLoggedIn) {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostScreen()));
-        }
-      });
-      return;
+      final ok = await _showLoginDialog();
+      if (!ok || !mounted) return;
     }
     Navigator.push(context, MaterialPageRoute(builder: (_) => const CreatePostScreen()));
   }
 
   @override
   Widget build(BuildContext context) {
-    final feed = context.watch<FeedService>();
     final auth = context.watch<AuthService>();
-
-    final newBadge = feed.lastNewCount > 0 ? ' • +${feed.lastNewCount} bago' : '';
+    final feed = context.watch<FeedService>();
+    final newBadge = feed.lastNewCount > 0 ? ' • +${feed.lastNewCount} new' : '';
 
     return Scaffold(
       appBar: AppBar(
@@ -116,27 +138,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
         centerTitle: true,
         actions: [
-          if (auth.isLoggedIn)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Center(
-                child: Text(
-                  auth.displayName ?? '',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
           IconButton(
             tooltip: auth.isLoggedIn ? 'Sign out' : 'Sign in',
             icon: Icon(auth.isLoggedIn ? Icons.logout : Icons.person_outline),
             onPressed: () async {
               if (auth.isLoggedIn) {
-                await auth.signOut();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Signed out. Pwede pa ring mag-browse.')),
-                  );
-                }
+                final sure = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Sign out?'),
+                    content: Text(auth.email ?? auth.displayName ?? ''),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('No')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Sign out')),
+                    ],
+                  ),
+                );
+                if (sure == true) await auth.signOut();
               } else {
                 _showLoginDialog();
               }
@@ -154,10 +176,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           controller: _tabController,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          tabs: [
-            const Tab(text: 'Lahat'),
-            ...kTopics.map((t) => Tab(text: '${t.emoji} ${t.nameTagalog}')),
-          ],
+          tabs: kTopics.map((t) => Tab(text: '${t.emoji} ${t.nameTagalog}')).toList(),
         ),
       ),
       body: Column(
@@ -173,8 +192,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 Expanded(
                   child: Text(
                     feed.lastRefresh == null
-                        ? 'Nagsisimula pa lang...'
-                        : 'Live • Auto-refresh every 1 min$newBadge • Last: ${_formatTime(feed.lastRefresh!)}',
+                        ? 'Starting...'
+                        : 'Live • Updates every 1 min$newBadge • Last: ${_formatTime(feed.lastRefresh!)}',
                     style: TextStyle(fontSize: 12, color: Colors.green.shade800),
                   ),
                 ),
@@ -184,10 +203,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           Expanded(
             child: TabBarView(
               controller: _tabController,
-              children: [
-                _buildFeed(feed),
-                ...kTopics.map((_) => _buildFeed(feed)),
-              ],
+              children: kTopics.map((t) => _TopicPage(topicId: t.id)).toList(),
             ),
           ),
         ],
@@ -200,23 +216,49 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildFeed(FeedService feed) {
-    if (feed.isLoading && feed.posts.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
+  String _formatTime(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+}
 
-    if (feed.posts.isEmpty) {
+/// One column. Keeps its own scroll position and its own posts.
+class _TopicPage extends StatefulWidget {
+  final String topicId;
+  const _TopicPage({required this.topicId});
+
+  @override
+  State<_TopicPage> createState() => _TopicPageState();
+}
+
+class _TopicPageState extends State<_TopicPage> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final feed = context.watch<FeedService>();
+    final posts = feed.postsFor(widget.topicId);
+
+    if (posts.isEmpty) {
+      if (feed.isLoadingTopic(widget.topicId)) {
+        return const Center(child: CircularProgressIndicator());
+      }
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.hourglass_empty, size: 48, color: Colors.grey),
             const SizedBox(height: 12),
-            const Text('Walang fresh content pa.'),
-            const SizedBox(height: 8),
+            const Text('Nothing here yet.'),
             TextButton(
               onPressed: () => feed.forceRefresh(),
-              child: const Text('I-refresh ngayon'),
+              child: const Text('Refresh'),
             ),
           ],
         ),
@@ -226,21 +268,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return RefreshIndicator(
       onRefresh: () => feed.forceRefresh(),
       child: ListView.builder(
+        key: PageStorageKey('feed_${widget.topicId}'),
         padding: const EdgeInsets.only(bottom: 88),
-        itemCount: feed.posts.length,
+        itemCount: posts.length,
         itemBuilder: (context, index) {
-          final post = feed.posts[index];
+          final post = posts[index];
           return PostCard(
+            key: ValueKey(post.id),
             post: post,
             onTapStoryOrVideo: () {
               if (post.type == PostType.story || post.type == PostType.video) {
-                final mediaPosts = feed.posts
+                final media = posts
                     .where((p) => p.type == PostType.story || p.type == PostType.video)
                     .toList();
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => StoryViewer(post: post, playlist: mediaPosts),
+                    builder: (_) => StoryViewer(post: post, playlist: media),
                   ),
                 );
               }
@@ -249,15 +293,5 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         },
       ),
     );
-  }
-
-  String _formatTime(DateTime dt) {
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    return '$hh:$mm';
   }
 }
