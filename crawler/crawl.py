@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""
+donut4u crawler: 12 topic bots search the internet, open every page they find,
+take the headline + main picture + video, and save everything to one file.
+
+Run:  python3 crawler/crawl.py out/posts.json
+"""
+import base64
+import datetime as dt
+import hashlib
+import html
+import json
+import os
+import re
+import sys
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from email.utils import parsedate_to_datetime
+
+UA = ('Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36')
+NOW = dt.datetime.now(dt.timezone.utc)
+MAX_AGE_HOURS = 48
+PER_TOPIC = 40
+CANDIDATES_PER_TOPIC = 80
+
+# ---------------------------------------------------------------------------
+# Each topic bot: its own searches (the internet), site feeds, YouTube channels
+# ---------------------------------------------------------------------------
+TOPICS = {
+    'viral': {
+        'name': 'Viral',
+        'queries': ['viral OR kumakalat OR netizens OR TikTok Pilipinas',
+                    'viral video Pinoy OR trending Philippines',
+                    'netizens reaction OR kumalat OR pinag-usapan Pilipinas',
+                    'trending sa social media Philippines today'],
+        'feeds': [],
+        'channels': [('KMJS', '@KMJS'), ('Rappler', '@rapplerdotcom')],
+    },
+    'haha': {
+        'name': 'Haha',
+        'queries': ['nakakatawang kwento OR nakakatawa OR katatawanan Pinoy',
+                    'funny story Pinoy OR Filipino funny moments',
+                    'meme OR prank OR biro OR kalokohan Pilipinas viral',
+                    'comedy skit OR bloopers OR funny video Philippines',
+                    'hugot funny OR joke OR pick-up lines Pinoy'],
+        'feeds': [],
+        'channels': [('Vice Ganda', '@ViceGandaOfficial'), ('Bubble Gang', '@BubbleGang'),
+                     ('Eat Bulaga', '@eatbulaga'), ('Its Showtime', '@ABSCBNsShowtime')],
+        'must': r'(haha|tawa|tuwa|funny|meme|prank|joke|biro|kalokohan|comed|hilarious|kwela|hugot|bloopers?|fail|silly|banat|comic)',
+        'never': r'(patay|pinatay|arestado|bagyo|lindol|nasawi|aksidente|killed|dead|death|arrest|earthquake|typhoon|senate|congress|court)',
+    },
+    'bago': {
+        'name': 'Bago',
+        'queries': ['bagong labas OR breaking OR latest Pilipinas'],
+        'feeds': [],
+        'channels': [],
+    },
+    'uso': {
+        'name': 'Uso',
+        'queries': ['trending OR uso OR challenge OR TikTok trend Pilipinas',
+                    'trending now Philippines OR fashion trend',
+                    'bagong uso OR kinagigiliwan OR sikat ngayon Pilipinas',
+                    'TikTok trend OR Facebook trend Philippines'],
+        'feeds': [],
+        'channels': [('Mashable', '@mashable'), ('BuzzFeed Video', '@buzzfeedvideo')],
+    },
+    'balita': {
+        'name': 'Balita',
+        'queries': ['balita Pilipinas OR breaking news Philippines',
+                    'gobyerno OR bagyo OR presyo OR ekonomiya Pilipinas',
+                    'krimen OR pulis OR korte OR aksidente Pilipinas',
+                    'Philippines news today'],
+        'feeds': [('Inquirer', 'https://newsinfo.inquirer.net/feed'),
+                  ('GMA News', 'https://data.gmanetwork.com/gno/rss/news/feed.xml'),
+                  ('Philstar', 'https://www.philstar.com/rss/headlines')],
+        'channels': [('ABS-CBN News', 'UCE2606prvXQc_noEqKxVJXA'),
+                     ('TV5 News', '@tv5newsph'),
+                     ('GMA Integrated News', '@gmanews'),
+                     ('INQUIRER.net', '@inquirerdotnet')],
+    },
+    'chika': {
+        'name': 'Chika',
+        'queries': ['showbiz OR chika OR celebrity OR artista OR loveteam Pilipinas',
+                    'celebrity Pinoy OR influencer Philippines',
+                    'tsismis OR issue OR break-up OR engaged artista',
+                    'showbiz news Philippines'],
+        'feeds': [('GMA Showbiz', 'https://data.gmanetwork.com/gno/rss/showbiz/feed.xml')],
+        'channels': [('GMA Public Affairs', '@gmapublicaffairs'), ('PEP.ph', '@pepph')],
+        'must': r'(showbiz|chika|celebrity|artista|loveteam|actor|actress|singer|influencer|vlogger|tsismis|kapamilya|kapuso|idol|star|pageant|miss universe|issue)',
+    },
+    'pagkain': {
+        'name': 'Pagkain',
+        'queries': ['pagkain OR recipe OR restaurant OR street food Pilipinas',
+                    'Filipino food OR lutuin OR kainan',
+                    'ulam OR meryenda OR dessert OR kape Pilipinas',
+                    'food trend OR new restaurant Manila OR Cebu OR Davao'],
+        'feeds': [],
+        'channels': [('Panlasang Pinoy', '@panlasangpinoy'), ('Ninong Ry', '@NinongRy'),
+                     ('Kawaling Pinoy', '@KawalingPinoy'), ('Tastemade', '@tastemade')],
+        'must': r'(food|pagkain|recipe|ulam|luto|lutuin|kain|restaurant|kainan|cafe|kape|dessert|meryenda|adobo|sinigang|lechon|pizza|burger|noodles|cook|chef|bake|street food|snack|menu)',
+    },
+    'libangan': {
+        'name': 'Libangan',
+        'queries': ['pelikula OR teleserye OR movie OR series Pilipinas',
+                    'OPM OR concert OR K-pop OR Netflix Philippines',
+                    'trailer OR movie review OR teleserye Pinoy',
+                    'music video OR new song OR album Pinoy'],
+        'feeds': [('Philstar Entertainment', 'https://www.philstar.com/rss/entertainment'),
+                  ('Inquirer Entertainment', 'https://entertainment.inquirer.net/feed')],
+        'channels': [('ABS-CBN Entertainment', '@ABSCBNEntertainment'),
+                     ('GMA Network', '@gmanetwork')],
+        'must': r'(movie|pelikula|film|teleserye|series|opm|concert|k-?pop|netflix|album|song|kanta|music|trailer|drama|show|festival|entertainment|anime|cinema|singer|band)',
+    },
+    'sports': {
+        'name': 'Sports',
+        'queries': ['sports OR basketball OR NBA OR PBA OR Gilas Pilipinas',
+                    'volleyball OR boxing OR football OR tennis OR UAAP OR Olympics',
+                    'laro OR palakasan OR MMA OR badminton'],
+        'feeds': [('Inquirer Sports', 'https://sports.inquirer.net/feed'),
+                  ('GMA Sports', 'https://data.gmanetwork.com/gno/rss/sports/feed.xml'),
+                  ('Philstar Sports', 'https://www.philstar.com/rss/sports')],
+        'channels': [('NBA', '@NBA'), ('ONE Championship', '@onechampionship'),
+                     ('FIBA', '@fiba'), ('Premier League', '@premierleague'),
+                     ('UFC', '@ufc')],
+        'must': r'(sport|basket|nba|pba|gilas|volley|boxing|boxer|football|soccer|tennis|uaap|ncaa|olympic|laro|palakasan|mma|badminton|athlete|coach|tournament|championship|league|goal|medal|swim|chess|esports)',
+    },
+    'tekno': {
+        'name': 'Tekno',
+        'queries': ['teknolohiya OR gadget OR smartphone OR app Pilipinas',
+                    'technology OR AI OR gaming OR Android news',
+                    'Globe OR Smart OR GCash OR Maya OR internet Philippines',
+                    'new phone OR laptop OR game release Philippines'],
+        'feeds': [('GMA SciTech', 'https://data.gmanetwork.com/gno/rss/scitech/feed.xml'),
+                  ('Inquirer Technology', 'https://technology.inquirer.net/feed')],
+        'channels': [('MKBHD', '@mkbhd'), ('Mrwhosetheboss', '@mrwhosetheboss'),
+                     ('The Verge', '@verge')],
+        'must': r'(tech|gadget|phone|smartphone|app\b|ai\b|android|iphone|laptop|gaming|game|software|internet|gcash|maya|globe|smart|robot|chip|cyber|digital|online|samsung|apple|google|meta)',
+    },
+    'pagibig': {
+        'name': 'Pag-ibig',
+        'queries': ['pag-ibig OR love OR relationship OR dating Pilipinas',
+                    'hugot OR payo OR kasal OR romance',
+                    'relationship advice OR love story Pinoy',
+                    'proposal OR wedding OR anniversary viral Pilipinas'],
+        'feeds': [('Philstar Lifestyle', 'https://www.philstar.com/rss/lifestyle'),
+                  ('GMA Lifestyle', 'https://data.gmanetwork.com/gno/rss/lifestyle/feed.xml')],
+        'channels': [],
+        'must': r'(love|pag-?ibig|relationship|dating|jowa|kasal|wedding|romance|romantic|hugot|boyfriend|girlfriend|couple|proposal|engaged|anniversary|breakup|break-up|asawa|crush|heartbreak|loveteam)',
+    },
+    'lokal': {
+        'name': 'Lokal',
+        'queries': ['lokal OR probinsya OR barangay OR lungsod Pilipinas',
+                    'Cebu OR Davao OR Mindanao OR Visayas OR Luzon OR LGU',
+                    'city hall OR mayor OR gobernador OR barangay balita',
+                    'Iloilo OR Baguio OR Bicol OR Pampanga OR Cagayan de Oro'],
+        'feeds': [('Philstar Nation', 'https://www.philstar.com/rss/nation'),
+                  ('GMA Regions', 'https://data.gmanetwork.com/gno/rss/news/regions/feed.xml')],
+        'channels': [('PTV Philippines', '@PTVPhilippines'), ('NET25', '@NET25Philippines')],
+    },
+}
+
+# Safety net: only explicit adult material and gore. Crime NEWS is allowed.
+BAD = re.compile(
+    r'\b(porn\w*|xxx|nsfw|onlyfans|nudes?|naked|hentai|erotic\w*|'
+    r'sex ?(?:tape|video|scandal)|hubad|escort|gore)\b', re.I)
+
+YT_ID = re.compile(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?v=|shorts/)|youtu\.be/)'
+                   r'([0-9A-Za-z_-]{11})')
+
+
+# ------------------------------------------------------------------ helpers
+def fetch(url, timeout=12, maxbytes=400_000, accept='text/html,application/xhtml+xml,*/*'):
+    req = urllib.request.Request(url, headers={
+        'User-Agent': UA,
+        'Accept': accept,
+        'Accept-Language': 'en-US,en;q=0.9,fil;q=0.8',
+        'Cookie': 'CONSENT=YES+1',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(maxbytes)
+            m = re.search(r'charset=([\w-]+)', r.headers.get('Content-Type', ''))
+            enc = m.group(1) if m else 'utf-8'
+            return r.status, data.decode(enc, 'replace'), r.geturl()
+    except Exception:
+        return 0, '', url
+
+
+def strip_tags(s):
+    s = re.sub(r'<[^>]*>', ' ', s or '')
+    s = html.unescape(s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def tag(raw, name):
+    n = re.escape(name)
+    m = re.search(r'<%s(?:\s[^>]*)?>(.*?)</%s>' % (n, n), raw, re.S)
+    if not m:
+        return ''
+    v = m.group(1).strip()
+    v = re.sub(r'^<!\[CDATA\[(.*?)\]\]>$', r'\1', v, flags=re.S)
+    return html.unescape(v).strip()
+
+
+def parse_date(s):
+    s = (s or '').strip()
+    if not s:
+        return NOW
+    d = None
+    try:
+        d = parsedate_to_datetime(s)
+    except Exception:
+        pass
+    if d is None:
+        try:
+            d = dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
+        except Exception:
+            return NOW
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    return min(d.astimezone(dt.timezone.utc), NOW)
+
+
+def shorten(s, n):
+    s = s or ''
+    if len(s) <= n:
+        return s
+    cut = s[:n]
+    sp = cut.rfind(' ')
+    return (cut[:sp] if sp > 40 else cut) + '…'
+
+
+def decode_google_news(link):
+    m = re.search(r'/articles/([\w-]+)', link)
+    if not m:
+        return None
+    s = m.group(1)
+    try:
+        raw = base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+    except Exception:
+        return None
+    m2 = re.search(rb'https?://[\x21-\x7e]+', raw)
+    return m2.group(0).decode('ascii', 'ignore') if m2 else None
+
+
+def real_url(link):
+    if 'bing.com/news' in link and 'url=' in link:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+        return (q.get('url') or [''])[0] or None
+    if 'news.google.com' in link:
+        return decode_google_news(link)
+    return link
+
+
+# ------------------------------------------------------ searching the web
+def rss_candidates(xml, origin):
+    out = []
+    for raw in re.findall(r'<item[ >].*?</item>', xml, re.S):
+        title = strip_tags(tag(raw, 'title'))
+        link = tag(raw, 'link')
+        if not title or not link:
+            continue
+        source = strip_tags(tag(raw, 'source')) or strip_tags(tag(raw, 'News:Source'))
+        if source and title.endswith(' - ' + source):
+            title = title[: -len(source) - 3].strip()
+        if not source:
+            source = origin if origin not in ('google', 'bing') else ''
+        img = tag(raw, 'News:Image')
+        if not img:
+            m = re.search(r'<(?:enclosure|media:content|media:thumbnail)[^>]*url=["\']([^"\']+)["\']', raw)
+            img = html.unescape(m.group(1)) if m else ''
+        url = real_url(link)
+        if not url or not url.startswith('http'):
+            continue
+        out.append({
+            'title': title,
+            'url': url,
+            'desc': shorten(strip_tags(tag(raw, 'description')), 220),
+            'source': source,
+            'image': img if img.startswith('http') else '',
+            'published': parse_date(tag(raw, 'pubDate')),
+            'video_id': '',
+            'video_url': '',
+            'search': origin in ('google', 'bing'),
+        })
+    return out
+
+
+def youtube_channel_id(value):
+    if value.startswith('UC') and len(value) == 24:
+        return value
+    handle = value if value.startswith('@') else '@' + value
+    code, body, _ = fetch('https://www.youtube.com/' + handle, maxbytes=600_000)
+    if code != 200:
+        return None
+    for p in (r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[0-9A-Za-z_-]{22})"',
+              r'"externalId":"(UC[0-9A-Za-z_-]{22})"',
+              r'"channelId":"(UC[0-9A-Za-z_-]{22})"'):
+        m = re.search(p, body)
+        if m:
+            return m.group(1)
+    return None
+
+
+def youtube_posts(tid, topic_name, channel_name, value):
+    cid = youtube_channel_id(value)
+    if not cid:
+        return [], f'{channel_name}: channel not found'
+    code, xml, _ = fetch('https://www.youtube.com/feeds/videos.xml?channel_id=' + cid,
+                         accept='application/atom+xml,*/*')
+    if code != 200:
+        return [], f'{channel_name}: HTTP {code}'
+    posts = []
+    for raw in re.findall(r'<entry>.*?</entry>', xml, re.S):
+        vid = tag(raw, 'yt:videoId')
+        title = strip_tags(tag(raw, 'title'))
+        if not vid or not title:
+            continue
+        pub = parse_date(tag(raw, 'published'))
+        if (NOW - pub) > dt.timedelta(hours=MAX_AGE_HOURS):
+            continue
+        is_short = '/shorts/' in raw
+        author = strip_tags(tag(raw, 'name')) or channel_name
+        posts.append({
+            'id': 'yt_' + vid,
+            'topicId': tid,
+            'topic': topic_name,
+            'kind': 'short' if is_short else 'video',
+            'title': shorten(title, 140),
+            'body': shorten(strip_tags(tag(raw, 'media:description')), 180),
+            'image': f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg',
+            'videoId': vid,
+            'videoUrl': '',
+            'source': author,
+            'url': f'https://www.youtube.com/{"shorts/" if is_short else "watch?v="}{vid}',
+            'published': pub.isoformat(),
+        })
+    return posts, f'{channel_name}: {len(posts)} new'
+
+
+def collect(tid, cfg):
+    cands = []
+    log = []
+    urls = []
+    for q in cfg['queries']:
+        enc = urllib.parse.quote_plus(q)
+        urls.append(('google', f'https://news.google.com/rss/search?q={enc}+when:2d&hl=fil&gl=PH&ceid=PH:fil'))
+        urls.append(('google', f'https://news.google.com/rss/search?q={enc}+when:2d&hl=en-PH&gl=PH&ceid=PH:en'))
+        urls.append(('bing', f'https://www.bing.com/news/search?q={enc}&format=rss&setmkt=en-PH'))
+    for name, u in cfg['feeds']:
+        urls.append((name, u))
+
+    stats = {}
+    for origin, u in urls:
+        code, xml, _ = fetch(u, accept='application/rss+xml,application/xml,text/xml,*/*')
+        got = rss_candidates(xml, origin) if code == 200 and xml else []
+        s = stats.setdefault(origin, [0, 0])
+        s[0] += 1 if code == 200 else 0
+        s[1] += len(got)
+        cands += got
+    for origin, (ok, n) in stats.items():
+        log.append(f'{origin}: {n} items ({ok} requests ok)')
+
+    yt = []
+    for cname, value in cfg['channels']:
+        posts, msg = youtube_posts(tid, cfg['name'], cname, value)
+        yt += posts
+        log.append('YouTube ' + msg)
+
+    # newest first, only fresh, no duplicate headlines
+    fresh = [c for c in cands if (NOW - c['published']) <= dt.timedelta(hours=MAX_AGE_HOURS)]
+    fresh.sort(key=lambda c: c['published'], reverse=True)
+    seen, unique = set(), []
+    for c in fresh:
+        key = re.sub(r'[^a-z0-9]', '', c['title'].lower())[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(c)
+    return unique[:CANDIDATES_PER_TOPIC], yt, log
+
+
+# ------------------------------------------- opening each page (the crawl)
+def meta_map(page):
+    metas = {}
+    for tg in re.findall(r'<meta\s+[^>]*>', page, re.I):
+        attrs = {}
+        for k, _, v1, v2 in re.findall(r'([\w:-]+)\s*=\s*("([^"]*)"|\'([^\']*)\')', tg):
+            attrs[k.lower()] = html.unescape(v1 or v2)
+        key = (attrs.get('property') or attrs.get('name') or '').lower()
+        if key and 'content' in attrs and key not in metas:
+            metas[key] = attrs['content']
+    return metas
+
+
+def enrich(c):
+    code, page, final = fetch(c['url'])
+    if code != 200 or not page:
+        return c
+    m = meta_map(page)
+    img = ''
+    for k in ('og:image', 'og:image:secure_url', 'og:image:url', 'twitter:image', 'twitter:image:src'):
+        if m.get(k):
+            img = m[k]
+            break
+    if img:
+        c['image'] = urllib.parse.urljoin(final, img)
+    desc = m.get('og:description') or m.get('description') or ''
+    if desc and len(desc) > len(c['desc']):
+        c['desc'] = shorten(strip_tags(desc), 220)
+    if not c['source']:
+        c['source'] = m.get('og:site_name') or urllib.parse.urlparse(final).netloc.replace('www.', '')
+
+    # a video on the page?
+    video_fields = [m.get(k, '') for k in ('og:video', 'og:video:url', 'og:video:secure_url', 'twitter:player')]
+    iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']*youtube[^"\']*)["\']', page, re.I)
+    for v in video_fields + iframes:
+        ym = YT_ID.search(v or '')
+        if ym:
+            c['video_id'] = ym.group(1)
+            break
+    if not c['video_id']:
+        for v in video_fields:
+            if v.startswith('https://') and re.search(r'\.mp4(\?|$)', v):
+                c['video_url'] = v
+                break
+    return c
+
+
+def good_image(url):
+    if not url.startswith('http'):
+        return False
+    low = url.lower()
+    return not any(w in low for w in ('logo', 'favicon', 'placeholder', 'default-image', 'sprite'))
+
+
+def fits(cfg, c):
+    """Content must really belong to the column."""
+    text = c['title'] + ' ' + c['desc']
+    if cfg.get('never') and re.search(cfg['never'], text, re.I):
+        return False
+    if cfg.get('must') and c.get('search', True):
+        return re.search(cfg['must'], text, re.I) is not None
+    return True
+
+
+# --------------------------------------------------------------------- main
+def main(out_path):
+    cfgs = list(TOPICS.items())
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        collected = list(pool.map(lambda kv: collect(kv[0], kv[1]), cfgs))
+
+    all_cands = []
+    for (tid, _), (cands, _, _) in zip(cfgs, collected):
+        for c in cands:
+            c['topicId'] = tid
+            all_cands.append(c)
+
+    print(f'Opening {len(all_cands)} pages...', flush=True)
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        list(pool.map(enrich, all_cands))
+
+    posts = []
+    print()
+    print('=== REPORT ===')
+    for (tid, cfg), (cands, yt, log) in zip(cfgs, collected):
+        items = []
+        skipped = 0
+        for c in cands:
+            if not good_image(c['image']):
+                skipped += 1          # no picture = boring, skip
+                continue
+            if BAD.search(c['title'] + ' ' + c['desc'] + ' ' + c['url']):
+                skipped += 1
+                continue
+            if not fits(cfg, c):
+                skipped += 1          # does not fit this column
+                continue
+            kind = 'video' if (c['video_id'] or c['video_url']) else 'article'
+            pid = hashlib.sha1((tid + c['url']).encode()).hexdigest()[:16]
+            items.append({
+                'id': pid,
+                'topicId': tid,
+                'topic': cfg['name'],
+                'kind': kind,
+                'title': shorten(c['title'], 140),
+                'body': c['desc'] or ('Mula sa ' + (c['source'] or 'internet') + '.'),
+                'image': c['image'],
+                'videoId': c['video_id'],
+                'videoUrl': c['video_url'],
+                'source': c['source'],
+                'url': c['url'],
+                'published': c['published'].isoformat(),
+            })
+        for y in yt:
+            if not BAD.search(y['title'] + ' ' + y['body']):
+                items.append(y)
+        items.sort(key=lambda p: p['published'], reverse=True)
+        items = items[:PER_TOPIC]
+        posts += items
+        videos = sum(1 for p in items if p['kind'] != 'article')
+        print(f"{cfg['name']:9} candidates={len(cands):3} skipped={skipped:3} "
+              f"-> posts={len(items):3} (videos/stories={videos})")
+        for line in log:
+            print('           ' + line)
+
+    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump({'generatedAt': NOW.isoformat(), 'count': len(posts), 'posts': posts},
+                  f, ensure_ascii=False)
+    print()
+    print(f'TOTAL posts saved: {len(posts)}')
+
+
+if __name__ == '__main__':
+    main(sys.argv[1] if len(sys.argv) > 1 else 'out/posts.json')
