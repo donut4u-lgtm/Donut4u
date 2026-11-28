@@ -1,45 +1,71 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import '../bots/manager_bot.dart';
 import '../models/post.dart';
 import '../models/topic.dart';
+import 'content_service.dart';
 import 'data_service.dart';
 
+/// Keeps a separate list for every column, so switching columns is instant
+/// and never shows the previous column's posts.
 class FeedService extends ChangeNotifier {
-  final ManagerBot _manager = ManagerBot();
   final DataService _data = DataService();
-  List<Post> _posts = [];
-  String? _currentTopicId;
-  bool _isLoading = false;
+  final ContentService _content = ContentService();
+
+  final Map<String, List<Post>> _byTopic = {};
+  final Map<String, bool> _loadingTopic = {};
+  final Map<String, int> _newCount = {};
+  final List<Post> _userPosts = [];
+
+  String _currentTopicId = kTopics.first.id;
   bool _disposed = false;
-  bool _topicJustChanged = false;
+  bool _started = false;
+  bool _busy = false;
   DateTime? _lastRefresh;
-  Timer? _uiTimer;
-  int _lastNewCount = 0;
+  Timer? _timer;
+  int _round = 0;
 
-  List<Post> get posts => _posts;
-  bool get isLoading => _isLoading;
+  static const int maxPerTopic = 60;
+
   DateTime? get lastRefresh => _lastRefresh;
-  String? get currentTopicId => _currentTopicId;
+  String get currentTopicId => _currentTopicId;
+  bool get isLoading => _loadingTopic[_currentTopicId] ?? false;
+  int get lastNewCount => _newCount[_currentTopicId] ?? 0;
 
-  /// How many posts appeared in the most recent refresh.
-  int get lastNewCount => _lastNewCount;
+  List<Post> postsFor(String topicId) {
+    final name = _nameOf(topicId);
+    final mine = _userPosts
+        .where((p) => p.topic.toLowerCase() == name.toLowerCase())
+        .toList();
+    return [...mine, ..._byTopic[topicId] ?? const <Post>[]];
+  }
+
+  bool isLoadingTopic(String topicId) => _loadingTopic[topicId] ?? false;
+
+  String _nameOf(String id) {
+    for (final t in kTopics) {
+      if (t.id == id) return t.nameTagalog;
+    }
+    return id;
+  }
+
+  Topic _topicOf(String id) =>
+      kTopics.firstWhere((t) => t.id == id, orElse: () => kTopics.first);
 
   void initialize() {
-    _manager.initialize();
+    if (_started) return;
+    _started = true;
     _data.initialize();
-    _load(refresh: true);
-    // Every minute: download fresh content from the internet, then update the screen.
-    _uiTimer?.cancel();
-    _uiTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (!_isLoading) _load(refresh: true);
+    _loadUserPosts();
+    _refreshAll();
+    _timer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _tick();
     });
   }
 
   @override
   void dispose() {
     _disposed = true;
-    _uiTimer?.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -47,65 +73,93 @@ class FeedService extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  String? get _currentTopicName {
-    if (_currentTopicId == null) return null;
-    for (final t in kTopics) {
-      if (t.id == _currentTopicId) return t.nameTagalog;
-    }
-    return null;
+  Future<void> _loadUserPosts() async {
+    try {
+      final list = await _data.fetchRecentUserPosts(maxAgeMinutes: 1440);
+      _userPosts
+        ..clear()
+        ..addAll(list);
+      _userPosts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _notify();
+    } catch (_) {}
   }
 
-  Future<void> _load({bool refresh = false}) async {
-    _isLoading = true;
+  Future<void> _refreshAll() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      await _refreshTopic(_currentTopicId);
+      for (final t in kTopics) {
+        if (_disposed) return;
+        if (t.id == _currentTopicId) continue;
+        await _refreshTopic(t.id);
+      }
+      _lastRefresh = DateTime.now();
+      _notify();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _tick() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      await _refreshTopic(_currentTopicId);
+      final others = kTopics.where((t) => t.id != _currentTopicId).toList();
+      if (others.isNotEmpty) {
+        final t = others[_round % others.length];
+        _round++;
+        await _refreshTopic(t.id);
+      }
+      _lastRefresh = DateTime.now();
+      _notify();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _refreshTopic(String id) async {
+    _loadingTopic[id] = true;
     _notify();
-
-    if (refresh) {
-      await _manager.forceRefresh();
+    try {
+      final fresh = await _content.postsForTopic(_topicOf(id));
+      final old = _byTopic[id] ?? <Post>[];
+      final oldIds = old.map((p) => p.id).toSet();
+      final added = fresh.where((p) => !oldIds.contains(p.id)).toList();
+      final merged = <String, Post>{};
+      for (final p in [...fresh, ...old]) {
+        merged.putIfAbsent(p.id, () => p);
+      }
+      final list = merged.values.toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _byTopic[id] = list.take(maxPerTopic).toList();
+      _newCount[id] = old.isEmpty ? 0 : added.length;
+    } catch (e) {
+      debugPrint('Refresh error ($id): $e');
     }
-
-    final topicName = _currentTopicName;
-    bool matches(Post p) =>
-        topicName == null || p.topic.toLowerCase() == topicName.toLowerCase();
-
-    final botPosts = _manager.getFreshPosts().where(matches).toList();
-    final userPosts =
-        await _data.fetchRecentUserPosts(maxAgeMinutes: ManagerBot.maxAgeMinutes);
-    final filteredUser = userPosts.where(matches).toList();
-
-    final all = [...filteredUser, ...botPosts];
-    all.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-    // Count what is new since the last time this list was shown.
-    final firstLoad = _lastRefresh == null;
-    if (firstLoad || _topicJustChanged) {
-      _lastNewCount = 0;
-    } else {
-      final oldIds = _posts.map((p) => p.id).toSet();
-      _lastNewCount = all.where((p) => !oldIds.contains(p.id)).length;
-    }
-    _topicJustChanged = false;
-
-    _posts = all;
-    _lastRefresh = DateTime.now();
-
-    _isLoading = false;
+    _loadingTopic[id] = false;
     _notify();
   }
 
-  Future<void> setTopic(String? topicId) async {
+  void setTopic(String topicId) {
     _currentTopicId = topicId;
-    _topicJustChanged = true;
-    await _load(refresh: false);
+    _notify();
+    if ((_byTopic[topicId] ?? const []).isEmpty && !_busy) {
+      _refreshTopic(topicId);
+    }
   }
 
-  /// Called by the refresh button and pull-to-refresh.
-  Future<void> forceRefresh() async => _load(refresh: true);
+  Future<void> forceRefresh() async {
+    _content.invalidate();
+    await _refreshTopic(_currentTopicId);
+    _lastRefresh = DateTime.now();
+    _notify();
+  }
 
   Future<void> addUserPost(Post post) async {
     await _data.saveUserPost(post);
-    _topicJustChanged = true;
-    await _load(refresh: false);
+    _userPosts.insert(0, post);
+    _notify();
   }
-
-  Map<String, String> getBotStatus() => _manager.getBotStatus();
 }
